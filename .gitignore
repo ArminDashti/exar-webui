@@ -1,1 +1,10 @@
+*.exe
+*.EXE
+
 /node_modules
+
+# --- auto: github-commit-push-all-repos ---
+.claude/worktrees/crazy-villani-fa123c/expenses-server.exe
+bin/server
+expenses-server.exe
+# --- end auto ---
