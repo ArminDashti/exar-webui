@@ -26,7 +26,7 @@ const form = reactive({
 })
 
 const grandTotal = computed(() =>
-  invoices.value.reduce((sum, inv) => sum + inv.total, 0)
+  (invoices.value ?? []).reduce((sum, inv) => sum + inv.total, 0)
 )
 
 const lineTotal = computed(() =>
@@ -50,9 +50,9 @@ async function loadData() {
         to_date: filters.to_date || undefined,
       }),
     ])
-    persons.value = p
-    shops.value = s
-    invoices.value = inv
+    persons.value = p ?? []
+    shops.value = s ?? []
+    invoices.value = inv ?? []
   } catch (e) {
     error.value = e.message
   } finally {

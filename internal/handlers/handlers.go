@@ -28,7 +28,7 @@ func (h *Handler) ListPersons(c *gin.Context) {
 	}
 	defer rows.Close()
 
-	var persons []models.Person
+	persons := make([]models.Person, 0)
 	for rows.Next() {
 		var p models.Person
 		if err := rows.Scan(&p.ID, &p.Name); err != nil {
@@ -49,7 +49,7 @@ func (h *Handler) ListShops(c *gin.Context) {
 	}
 	defer rows.Close()
 
-	var shops []models.Shop
+	shops := make([]models.Shop, 0)
 	for rows.Next() {
 		var s models.Shop
 		if err := rows.Scan(&s.ID, &s.Name); err != nil {
@@ -153,7 +153,7 @@ func (h *Handler) ListInvoices(c *gin.Context) {
 	}
 	defer rows.Close()
 
-	var invoices []models.Invoice
+	invoices := make([]models.Invoice, 0)
 	var invoiceIDs []int
 	for rows.Next() {
 		var inv models.Invoice
