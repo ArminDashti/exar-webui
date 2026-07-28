@@ -8,5 +8,6 @@
 .claude/worktrees/crazy-villani-fa123c/expenses-server.exe bin/server bin/server.exe expenses-server.exe
 .claude/worktrees/crazy-villani-fa123c/expenses-server.exe bin/server expenses-server.exe
 bin/server
+bin/server expenses-server.exe
 expenses-server.exe
 # --- end auto ---

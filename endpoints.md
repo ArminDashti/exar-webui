@@ -12,6 +12,8 @@ There is no authentication. Anyone who can reach the server can call these endpo
 
 Dates in the API and database are Gregorian `YYYY-MM-DD`. The web UI displays Jalali dates.
 
+There is no invoice model. Each spending record is a flat **expense** with its own paid-by, shop, date, name, amount, and per-person shares.
+
 ---
 
 ## Persons
@@ -35,7 +37,13 @@ List the two fixed people in the app.
 
 ### `GET /shops`
 
-List all shops, sorted by name.
+List all shops, sorted by name. Optional search with `q` (minimum 3 characters; shorter queries return `[]`).
+
+**Query parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `q` | string | Case-insensitive substring search; empty result if shorter than 3 characters |
 
 **Response `200`**
 
@@ -50,10 +58,6 @@ List all shops, sorted by name.
 Create a new shop.
 
 **Request body**
-
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| `name` | string | yes | Trimmed; must be non-empty |
 
 ```json
 { "name": "Grocery Store" }
@@ -76,123 +80,25 @@ Create a new shop.
 
 Rename a shop.
 
-**Request body**
-
-```json
-{ "name": "Corner Market" }
-```
-
-**Response `200`**
-
-```json
-{ "id": 3, "name": "Corner Market" }
-```
-
-**Errors**
-
-| Status | Condition |
-|--------|-----------|
-| `400` | Invalid `id` or empty `name` |
-| `404` | Shop not found |
-| `409` | Shop name already exists |
+**Response `200`** — updated shop.
 
 ### `DELETE /shops/:id`
 
-Delete a shop by ID.
-
-**Response `204`** — no body.
-
-**Errors**
-
-| Status | Condition |
-|--------|-----------|
-| `400` | Invalid `id` |
-| `404` | Shop not found |
-| `409` | Shop is referenced by one or more invoices |
+**Response `204`**. Fails with `409` if the shop is used by expenses.
 
 ---
 
 ## Items
 
-Catalog of item names used for expense line-item autocomplete. Invoice lines store the name as text (no foreign key).
+Catalog of item names used for expense name autocomplete. Expenses store the name as text (no foreign key).
 
 ### `GET /items`
 
-List all items, sorted by name. Optional search with `q` (minimum 3 characters; shorter queries return `[]`).
+Optional `q` search (minimum 3 characters).
 
-**Query parameters**
+### `POST /items` / `PUT /items/:id` / `DELETE /items/:id`
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `q` | string | Case-insensitive substring search; ignored (empty result) if shorter than 3 characters |
-
-**Response `200`**
-
-```json
-[
-  { "id": 1, "name": "Milk" }
-]
-```
-
-### `POST /items`
-
-Create a catalog item.
-
-**Request body**
-
-```json
-{ "name": "Milk" }
-```
-
-**Response `201`**
-
-```json
-{ "id": 1, "name": "Milk" }
-```
-
-**Errors**
-
-| Status | Condition |
-|--------|-----------|
-| `400` | Missing or empty `name` |
-| `409` | Item name already exists |
-
-### `PUT /items/:id`
-
-Rename a catalog item.
-
-**Request body**
-
-```json
-{ "name": "Organic Milk" }
-```
-
-**Response `200`**
-
-```json
-{ "id": 1, "name": "Organic Milk" }
-```
-
-**Errors**
-
-| Status | Condition |
-|--------|-----------|
-| `400` | Invalid `id` or empty `name` |
-| `404` | Item not found |
-| `409` | Item name already exists |
-
-### `DELETE /items/:id`
-
-Delete a catalog item. Always allowed (invoices keep historical names).
-
-**Response `204`** — no body.
-
-**Errors**
-
-| Status | Condition |
-|--------|-----------|
-| `400` | Invalid `id` |
-| `404` | Item not found |
+Same create/rename/delete behavior as shops (unique names).
 
 ---
 
@@ -200,45 +106,47 @@ Delete a catalog item. Always allowed (invoices keep historical names).
 
 ### `GET /stats`
 
-Aggregated spend totals. `by_person` uses share-weighted amounts (`invoice total × share`).
+Monthly totals in Jalali months (`YYYY/MM`).
 
-**Query parameters** (all optional, Gregorian)
+**Query parameters** (optional, Gregorian)
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `from_date` | string | Include invoices on or after (`YYYY-MM-DD`) |
-| `to_date` | string | Include invoices on or before (`YYYY-MM-DD`) |
+| `from_date` | string | Include expenses on or after (`YYYY-MM-DD`) |
+| `to_date` | string | Include expenses on or before (`YYYY-MM-DD`) |
 
 **Response `200`**
 
 ```json
 {
-  "total": 100.0,
-  "by_person": [
-    { "person_id": 1, "person_name": "Armin", "total": 60.0 },
-    { "person_id": 2, "person_name": "Ramin", "total": 40.0 }
-  ],
-  "by_shop": [
-    { "shop_id": 1, "shop_name": "Grocery Store", "total": 100.0 }
+  "by_month": [
+    {
+      "month": "1405/04",
+      "armin": 100,
+      "ramin": 50,
+      "total": 150,
+      "armin_share": 90,
+      "ramin_share": 60
+    }
   ]
 }
 ```
 
+| Field | Meaning |
+|-------|---------|
+| `armin` / `ramin` | Sum of amounts where that person paid |
+| `total` | Sum of all amounts |
+| `armin_share` / `ramin_share` | `SUM(amount × share)` obligation |
+
 ---
 
-## Invoices
+## Expenses
 
-### `GET /invoices`
+### `GET /expenses`
 
-List invoices with line items and shares, newest first.
+List flat expenses with shares, newest first.
 
-**Query parameters** (all optional)
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `person_id` | integer | Filter by person who paid (`1` or `2`) |
-| `from_date` | string | Include invoices on or after this date (`YYYY-MM-DD`) |
-| `to_date` | string | Include invoices on or before this date (`YYYY-MM-DD`) |
+**Query parameters** (optional): `person_id`, `from_date`, `to_date`.
 
 **Response `200`**
 
@@ -251,61 +159,25 @@ List invoices with line items and shares, newest first.
     "shop_id": 2,
     "shop_name": "Grocery Store",
     "date": "2026-06-15",
-    "total": 9.0,
-    "items": [
-      {
-        "id": 21,
-        "invoice_id": 10,
-        "description": "Milk",
-        "amount": 4.50,
-        "quantity": 1
-      },
-      {
-        "id": 22,
-        "invoice_id": 10,
-        "description": "Bread",
-        "amount": 4.50,
-        "quantity": 1
-      }
-    ],
+    "name": "Milk",
+    "amount": 45,
     "shares": [
-      { "person_id": 1, "person_name": "Armin", "share": 0.3 },
-      { "person_id": 2, "person_name": "Ramin", "share": 0.7 }
+      { "person_id": 1, "person_name": "Armin", "share": 0.7 },
+      { "person_id": 2, "person_name": "Ramin", "share": 0.3 }
     ]
   }
 ]
 ```
 
-### `GET /invoices/:id`
+### `GET /expenses/:id`
 
-Get a single invoice with line items and shares.
+Single expense. `404` if missing.
 
-**Response `200`** — same shape as one element in the list response above.
+### `POST /expenses`
 
-**Errors**
-
-| Status | Condition |
-|--------|-----------|
-| `400` | Invalid `id` |
-| `404` | Invoice not found |
-
-### `POST /invoices`
-
-Create an invoice, line items, and per-person shares in one transaction. The server computes `total` as the sum of `amount` for each item. Quantity is always stored as `1`. Shares must include every person and sum to `1` (within `0.001`).
+Batch-create flat expenses (no parent record). Shared header fields apply to each line.
 
 **Request body**
-
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| `person_id` | integer | yes | Who paid; must be `1` or `2` |
-| `shop_id` | integer | yes | Must reference an existing shop |
-| `date` | string | yes | Gregorian `YYYY-MM-DD` |
-| `items` | array | yes | At least one item |
-| `items[].description` | string | yes | Item name (trimmed) |
-| `items[].amount` | number | yes | Line amount |
-| `shares` | array | yes | One entry per person |
-| `shares[].person_id` | integer | yes | Must be `1` or `2` |
-| `shares[].share` | number | yes | Fraction of the expense (`>= 0`) |
 
 ```json
 {
@@ -313,48 +185,45 @@ Create an invoice, line items, and per-person shares in one transaction. The ser
   "shop_id": 2,
   "date": "2026-06-15",
   "items": [
-    { "description": "Milk", "amount": 4.50 }
-  ],
-  "shares": [
-    { "person_id": 1, "share": 0.3 },
-    { "person_id": 2, "share": 0.7 }
+    {
+      "name": "Milk",
+      "amount": 45,
+      "shares": [
+        { "person_id": 1, "share": 0.7 },
+        { "person_id": 2, "share": 0.3 }
+      ]
+    }
   ]
 }
 ```
 
-**Response `201`** — full invoice object (same shape as `GET /invoices/:id`). If the created invoice cannot be loaded, the response is `{"id": <new_id>}`.
+Each item’s shares must include persons `1` and `2` and sum to `1` (within `0.001`).
 
-**Errors**
+**Response `201`** — array of created expenses.
 
-| Status | Condition |
-|--------|-----------|
-| `400` | Validation failure, invalid `person_id`/`shop_id`, or shares do not sum to 1 |
+### `PUT /expenses/:id`
 
-### `PUT /invoices/:id`
+Update one expense.
 
-Replace payer, shop, date, line items, and shares. Same body and validation as `POST /invoices`.
+**Request body**
 
-**Response `200`** — full updated invoice.
+```json
+{
+  "person_id": 1,
+  "shop_id": 2,
+  "date": "2026-06-15",
+  "name": "Milk",
+  "amount": 45,
+  "shares": [
+    { "person_id": 1, "share": 0.5 },
+    { "person_id": 2, "share": 0.5 }
+  ]
+}
+```
 
-**Errors**
+### `DELETE /expenses/:id`
 
-| Status | Condition |
-|--------|-----------|
-| `400` | Validation failure |
-| `404` | Invoice not found |
-
-### `DELETE /invoices/:id`
-
-Delete an invoice, its line items, and its shares.
-
-**Response `204`** — no body.
-
-**Errors**
-
-| Status | Condition |
-|--------|-----------|
-| `400` | Invalid `id` |
-| `404` | Invoice not found |
+**Response `204`**.
 
 ---
 

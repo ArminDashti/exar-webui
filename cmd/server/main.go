@@ -43,11 +43,11 @@ func main() {
 		api.PUT("/items/:id", h.UpdateItem)
 		api.DELETE("/items/:id", h.DeleteItem)
 		api.GET("/stats", h.GetStats)
-		api.GET("/invoices", h.ListInvoices)
-		api.GET("/invoices/:id", h.GetInvoice)
-		api.POST("/invoices", h.CreateInvoice)
-		api.PUT("/invoices/:id", h.UpdateInvoice)
-		api.DELETE("/invoices/:id", h.DeleteInvoice)
+		api.GET("/expenses", h.ListExpenses)
+		api.GET("/expenses/:id", h.GetExpense)
+		api.POST("/expenses", h.CreateExpenses)
+		api.PUT("/expenses/:id", h.UpdateExpense)
+		api.DELETE("/expenses/:id", h.DeleteExpense)
 	}
 
 	if info, err := os.Stat(staticDir); err == nil && info.IsDir() {

@@ -5,10 +5,12 @@ import (
 	"errors"
 	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/armin/expenses/backend/internal/database"
+	"github.com/armin/expenses/backend/internal/jalali"
 	"github.com/armin/expenses/backend/internal/models"
 	"github.com/gin-gonic/gin"
 )
@@ -43,7 +45,24 @@ func (h *Handler) ListPersons(c *gin.Context) {
 }
 
 func (h *Handler) ListShops(c *gin.Context) {
-	rows, err := h.db.Query(`SELECT id, name FROM shops ORDER BY name`)
+	q := strings.TrimSpace(c.Query("q"))
+	if q != "" && len([]rune(q)) < 3 {
+		c.JSON(http.StatusOK, []models.Shop{})
+		return
+	}
+
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if q != "" {
+		rows, err = h.db.Query(
+			`SELECT id, name FROM shops WHERE name LIKE ? COLLATE NOCASE ORDER BY name`,
+			"%"+q+"%",
+		)
+	} else {
+		rows, err = h.db.Query(`SELECT id, name FROM shops ORDER BY name`)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list shops"})
 		return
@@ -136,12 +155,12 @@ func (h *Handler) DeleteShop(c *gin.Context) {
 	}
 
 	var inUse int
-	if err := h.db.QueryRow(`SELECT COUNT(*) FROM invoices WHERE shop_id = ?`, id).Scan(&inUse); err != nil {
+	if err := h.db.QueryRow(`SELECT COUNT(*) FROM expenses WHERE shop_id = ?`, id).Scan(&inUse); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check shop usage"})
 		return
 	}
 	if inUse > 0 {
-		c.JSON(http.StatusConflict, gin.H{"error": "shop is used by invoices"})
+		c.JSON(http.StatusConflict, gin.H{"error": "shop is used by expenses"})
 		return
 	}
 
@@ -292,263 +311,69 @@ func (h *Handler) GetStats(c *gin.Context) {
 	where := []string{"1=1"}
 	args := make([]any, 0)
 	if fromDate != "" {
-		where = append(where, "i.date >= ?")
+		where = append(where, "e.date >= ?")
 		args = append(args, fromDate)
 	}
 	if toDate != "" {
-		where = append(where, "i.date <= ?")
+		where = append(where, "e.date <= ?")
 		args = append(args, toDate)
 	}
 	whereSQL := strings.Join(where, " AND ")
 
-	var total float64
-	totalQuery := `SELECT COALESCE(SUM(i.total), 0) FROM invoices i WHERE ` + whereSQL
-	if err := h.db.QueryRow(totalQuery, args...).Scan(&total); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to compute total"})
-		return
-	}
-
-	byPerson := make([]models.PersonTotal, 0)
-	personQuery := `
-		SELECT p.id, p.name, COALESCE(SUM(i.total * sh.share), 0)
-		FROM persons p
-		LEFT JOIN invoice_shares sh ON sh.person_id = p.id
-		LEFT JOIN invoices i ON i.id = sh.invoice_id AND ` + whereSQL + `
-		GROUP BY p.id, p.name
-		ORDER BY p.id`
-	personRows, err := h.db.Query(personQuery, args...)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to compute person stats"})
-		return
-	}
-	defer personRows.Close()
-	for personRows.Next() {
-		var row models.PersonTotal
-		if err := personRows.Scan(&row.PersonID, &row.PersonName, &row.Total); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read person stats"})
-			return
-		}
-		byPerson = append(byPerson, row)
-	}
-
-	byShop := make([]models.ShopTotal, 0)
-	shopQuery := `
-		SELECT s.id, s.name, SUM(i.total) AS total
-		FROM invoices i
-		JOIN shops s ON s.id = i.shop_id
-		WHERE ` + whereSQL + `
-		GROUP BY s.id, s.name
-		ORDER BY total DESC`
-	shopRows, err := h.db.Query(shopQuery, args...)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to compute shop stats"})
-		return
-	}
-	defer shopRows.Close()
-	for shopRows.Next() {
-		var row models.ShopTotal
-		if err := shopRows.Scan(&row.ShopID, &row.ShopName, &row.Total); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read shop stats"})
-			return
-		}
-		byShop = append(byShop, row)
-	}
-
-	c.JSON(http.StatusOK, models.Stats{
-		Total:    total,
-		ByPerson: byPerson,
-		ByShop:   byShop,
-	})
-}
-
-func (h *Handler) ListInvoices(c *gin.Context) {
 	query := `
-		SELECT i.id, i.person_id, p.name, i.shop_id, s.name, i.date, i.total
-		FROM invoices i
-		JOIN persons p ON p.id = i.person_id
-		JOIN shops s ON s.id = i.shop_id
-		WHERE 1=1
-	`
-	args := []any{}
-
-	if personID := c.Query("person_id"); personID != "" {
-		query += ` AND i.person_id = ?`
-		args = append(args, personID)
-	}
-	if from := c.Query("from_date"); from != "" {
-		query += ` AND i.date >= ?`
-		args = append(args, from)
-	}
-	if to := c.Query("to_date"); to != "" {
-		query += ` AND i.date <= ?`
-		args = append(args, to)
-	}
-
-	query += ` ORDER BY i.date DESC, i.id DESC`
+		SELECT e.date, e.person_id, e.amount,
+			COALESCE((SELECT share FROM expense_shares WHERE expense_id = e.id AND person_id = 1), 0),
+			COALESCE((SELECT share FROM expense_shares WHERE expense_id = e.id AND person_id = 2), 0)
+		FROM expenses e
+		WHERE ` + whereSQL
 
 	rows, err := h.db.Query(query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list invoices"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load expenses for stats"})
 		return
 	}
 	defer rows.Close()
 
-	invoices := make([]models.Invoice, 0)
-	var invoiceIDs []int
+	byMonth := make(map[string]*models.MonthStats)
 	for rows.Next() {
-		var inv models.Invoice
-		if err := rows.Scan(&inv.ID, &inv.PersonID, &inv.PersonName, &inv.ShopID, &inv.ShopName, &inv.Date, &inv.Total); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read invoices"})
+		var date string
+		var personID int
+		var amount, arminShareFrac, raminShareFrac float64
+		if err := rows.Scan(&date, &personID, &amount, &arminShareFrac, &raminShareFrac); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read expense stats"})
 			return
 		}
-		inv.Items = []models.InvoiceItem{}
-		inv.Shares = []models.InvoiceShare{}
-		invoices = append(invoices, inv)
-		invoiceIDs = append(invoiceIDs, inv.ID)
-	}
-
-	if len(invoiceIDs) > 0 {
-		itemsByInvoice, err := h.loadItemsForInvoices(invoiceIDs)
+		month, err := jalali.MonthKeyFromGregorian(date)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load invoice items"})
-			return
+			continue
 		}
-		sharesByInvoice, err := h.loadSharesForInvoices(invoiceIDs)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load invoice shares"})
-			return
+		row, ok := byMonth[month]
+		if !ok {
+			row = &models.MonthStats{Month: month}
+			byMonth[month] = row
 		}
-		for i := range invoices {
-			if items, ok := itemsByInvoice[invoices[i].ID]; ok {
-				invoices[i].Items = items
-			}
-			if shares, ok := sharesByInvoice[invoices[i].ID]; ok {
-				invoices[i].Shares = shares
-			}
+		row.Total += amount
+		if personID == 1 {
+			row.Armin += amount
+		} else if personID == 2 {
+			row.Ramin += amount
 		}
+		row.ArminShare += amount * arminShareFrac
+		row.RaminShare += amount * raminShareFrac
 	}
 
-	c.JSON(http.StatusOK, invoices)
+	months := make([]models.MonthStats, 0, len(byMonth))
+	for _, row := range byMonth {
+		months = append(months, *row)
+	}
+	sort.Slice(months, func(i, j int) bool {
+		return months[i].Month > months[j].Month
+	})
+
+	c.JSON(http.StatusOK, models.Stats{ByMonth: months})
 }
 
-func (h *Handler) loadItemsForInvoices(invoiceIDs []int) (map[int][]models.InvoiceItem, error) {
-	placeholders := make([]string, len(invoiceIDs))
-	args := make([]any, len(invoiceIDs))
-	for i, id := range invoiceIDs {
-		placeholders[i] = "?"
-		args[i] = id
-	}
-
-	query := `SELECT id, invoice_id, description, amount, quantity
-		FROM invoice_items WHERE invoice_id IN (` + strings.Join(placeholders, ",") + `)
-		ORDER BY id`
-
-	rows, err := h.db.Query(query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	result := make(map[int][]models.InvoiceItem)
-	for rows.Next() {
-		var item models.InvoiceItem
-		if err := rows.Scan(&item.ID, &item.InvoiceID, &item.Description, &item.Amount, &item.Quantity); err != nil {
-			return nil, err
-		}
-		result[item.InvoiceID] = append(result[item.InvoiceID], item)
-	}
-
-	return result, nil
-}
-
-func (h *Handler) loadSharesForInvoices(invoiceIDs []int) (map[int][]models.InvoiceShare, error) {
-	placeholders := make([]string, len(invoiceIDs))
-	args := make([]any, len(invoiceIDs))
-	for i, id := range invoiceIDs {
-		placeholders[i] = "?"
-		args[i] = id
-	}
-
-	query := `SELECT sh.invoice_id, sh.person_id, p.name, sh.share
-		FROM invoice_shares sh
-		JOIN persons p ON p.id = sh.person_id
-		WHERE sh.invoice_id IN (` + strings.Join(placeholders, ",") + `)
-		ORDER BY sh.person_id`
-
-	rows, err := h.db.Query(query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	result := make(map[int][]models.InvoiceShare)
-	for rows.Next() {
-		var invoiceID int
-		var share models.InvoiceShare
-		if err := rows.Scan(&invoiceID, &share.PersonID, &share.PersonName, &share.Share); err != nil {
-			return nil, err
-		}
-		result[invoiceID] = append(result[invoiceID], share)
-	}
-
-	return result, nil
-}
-
-func (h *Handler) GetInvoice(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid invoice id"})
-		return
-	}
-
-	inv, err := h.fetchInvoice(id)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "invoice not found"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get invoice"})
-		return
-	}
-
-	c.JSON(http.StatusOK, inv)
-}
-
-func (h *Handler) fetchInvoice(id int) (models.Invoice, error) {
-	var inv models.Invoice
-	err := h.db.QueryRow(`
-		SELECT i.id, i.person_id, p.name, i.shop_id, s.name, i.date, i.total
-		FROM invoices i
-		JOIN persons p ON p.id = i.person_id
-		JOIN shops s ON s.id = i.shop_id
-		WHERE i.id = ?`, id,
-	).Scan(&inv.ID, &inv.PersonID, &inv.PersonName, &inv.ShopID, &inv.ShopName, &inv.Date, &inv.Total)
-	if err != nil {
-		return inv, err
-	}
-
-	itemsByInvoice, err := h.loadItemsForInvoices([]int{id})
-	if err != nil {
-		return inv, err
-	}
-	inv.Items = itemsByInvoice[id]
-	if inv.Items == nil {
-		inv.Items = []models.InvoiceItem{}
-	}
-
-	sharesByInvoice, err := h.loadSharesForInvoices([]int{id})
-	if err != nil {
-		return inv, err
-	}
-	inv.Shares = sharesByInvoice[id]
-	if inv.Shares == nil {
-		inv.Shares = []models.InvoiceShare{}
-	}
-
-	return inv, nil
-}
-
-func validateShares(shares []models.InvoiceShareInput) error {
+func validateShares(shares []models.ExpenseShareInput) error {
 	seen := make(map[int]bool, len(shares))
 	var sum float64
 	for _, s := range shares {
@@ -577,11 +402,11 @@ func validateShares(shares []models.InvoiceShareInput) error {
 	return nil
 }
 
-func insertShares(tx *sql.Tx, invoiceID int64, shares []models.InvoiceShareInput) error {
+func insertExpenseShares(tx *sql.Tx, expenseID int64, shares []models.ExpenseShareInput) error {
 	for _, s := range shares {
 		_, err := tx.Exec(
-			`INSERT INTO invoice_shares (invoice_id, person_id, share) VALUES (?, ?, ?)`,
-			invoiceID, s.PersonID, s.Share,
+			`INSERT INTO expense_shares (expense_id, person_id, share) VALUES (?, ?, ?)`,
+			expenseID, s.PersonID, s.Share,
 		)
 		if err != nil {
 			return err
@@ -590,8 +415,147 @@ func insertShares(tx *sql.Tx, invoiceID int64, shares []models.InvoiceShareInput
 	return nil
 }
 
-func (h *Handler) CreateInvoice(c *gin.Context) {
-	var req models.CreateInvoiceRequest
+func (h *Handler) ListExpenses(c *gin.Context) {
+	query := `
+		SELECT e.id, e.person_id, p.name, e.shop_id, s.name, e.date, e.name, e.amount
+		FROM expenses e
+		JOIN persons p ON p.id = e.person_id
+		JOIN shops s ON s.id = e.shop_id
+		WHERE 1=1
+	`
+	args := []any{}
+
+	if personID := c.Query("person_id"); personID != "" {
+		query += ` AND e.person_id = ?`
+		args = append(args, personID)
+	}
+	if from := c.Query("from_date"); from != "" {
+		query += ` AND e.date >= ?`
+		args = append(args, from)
+	}
+	if to := c.Query("to_date"); to != "" {
+		query += ` AND e.date <= ?`
+		args = append(args, to)
+	}
+
+	query += ` ORDER BY e.date DESC, e.id DESC`
+
+	rows, err := h.db.Query(query, args...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list expenses"})
+		return
+	}
+	defer rows.Close()
+
+	expenses := make([]models.Expense, 0)
+	var expenseIDs []int
+	for rows.Next() {
+		var e models.Expense
+		if err := rows.Scan(&e.ID, &e.PersonID, &e.PersonName, &e.ShopID, &e.ShopName, &e.Date, &e.Name, &e.Amount); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read expenses"})
+			return
+		}
+		e.Shares = []models.ExpenseShare{}
+		expenses = append(expenses, e)
+		expenseIDs = append(expenseIDs, e.ID)
+	}
+
+	if len(expenseIDs) > 0 {
+		sharesByExpense, err := h.loadSharesForExpenses(expenseIDs)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load expense shares"})
+			return
+		}
+		for i := range expenses {
+			if shares, ok := sharesByExpense[expenses[i].ID]; ok {
+				expenses[i].Shares = shares
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, expenses)
+}
+
+func (h *Handler) loadSharesForExpenses(expenseIDs []int) (map[int][]models.ExpenseShare, error) {
+	placeholders := make([]string, len(expenseIDs))
+	args := make([]any, len(expenseIDs))
+	for i, id := range expenseIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
+	query := `SELECT sh.expense_id, sh.person_id, p.name, sh.share
+		FROM expense_shares sh
+		JOIN persons p ON p.id = sh.person_id
+		WHERE sh.expense_id IN (` + strings.Join(placeholders, ",") + `)
+		ORDER BY sh.person_id`
+
+	rows, err := h.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[int][]models.ExpenseShare)
+	for rows.Next() {
+		var expenseID int
+		var share models.ExpenseShare
+		if err := rows.Scan(&expenseID, &share.PersonID, &share.PersonName, &share.Share); err != nil {
+			return nil, err
+		}
+		result[expenseID] = append(result[expenseID], share)
+	}
+
+	return result, nil
+}
+
+func (h *Handler) GetExpense(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid expense id"})
+		return
+	}
+
+	exp, err := h.fetchExpense(id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "expense not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get expense"})
+		return
+	}
+
+	c.JSON(http.StatusOK, exp)
+}
+
+func (h *Handler) fetchExpense(id int) (models.Expense, error) {
+	var e models.Expense
+	err := h.db.QueryRow(`
+		SELECT e.id, e.person_id, p.name, e.shop_id, s.name, e.date, e.name, e.amount
+		FROM expenses e
+		JOIN persons p ON p.id = e.person_id
+		JOIN shops s ON s.id = e.shop_id
+		WHERE e.id = ?`, id,
+	).Scan(&e.ID, &e.PersonID, &e.PersonName, &e.ShopID, &e.ShopName, &e.Date, &e.Name, &e.Amount)
+	if err != nil {
+		return e, err
+	}
+
+	sharesByExpense, err := h.loadSharesForExpenses([]int{id})
+	if err != nil {
+		return e, err
+	}
+	e.Shares = sharesByExpense[id]
+	if e.Shares == nil {
+		e.Shares = []models.ExpenseShare{}
+	}
+
+	return e, nil
+}
+
+func (h *Handler) CreateExpenses(c *gin.Context) {
+	var req models.CreateExpensesRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -602,20 +566,21 @@ func (h *Handler) CreateInvoice(c *gin.Context) {
 		return
 	}
 
-	if err := validateShares(req.Shares); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
+	for _, item := range req.Items {
+		if err := validateShares(item.Shares); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if strings.TrimSpace(item.Name) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "item name is required"})
+			return
+		}
 	}
 
 	var shopExists int
 	if err := h.db.QueryRow(`SELECT COUNT(*) FROM shops WHERE id = ?`, req.ShopID).Scan(&shopExists); err != nil || shopExists == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid shop_id"})
 		return
-	}
-
-	var total float64
-	for _, item := range req.Items {
-		total += item.Amount
 	}
 
 	tx, err := h.db.Begin()
@@ -625,55 +590,49 @@ func (h *Handler) CreateInvoice(c *gin.Context) {
 	}
 	defer tx.Rollback()
 
-	result, err := tx.Exec(
-		`INSERT INTO invoices (person_id, shop_id, date, total) VALUES (?, ?, ?, ?)`,
-		req.PersonID, req.ShopID, req.Date, total,
-	)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create invoice"})
-		return
-	}
-
-	invoiceID, _ := result.LastInsertId()
-
+	createdIDs := make([]int, 0, len(req.Items))
 	for _, item := range req.Items {
-		_, err := tx.Exec(
-			`INSERT INTO invoice_items (invoice_id, description, amount, quantity) VALUES (?, ?, ?, ?)`,
-			invoiceID, strings.TrimSpace(item.Description), item.Amount, 1,
+		result, err := tx.Exec(
+			`INSERT INTO expenses (person_id, shop_id, date, name, amount) VALUES (?, ?, ?, ?, ?)`,
+			req.PersonID, req.ShopID, req.Date, strings.TrimSpace(item.Name), item.Amount,
 		)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create invoice items"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create expense"})
 			return
 		}
-	}
-
-	if err := insertShares(tx, invoiceID, req.Shares); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create invoice shares"})
-		return
+		expenseID, _ := result.LastInsertId()
+		if err := insertExpenseShares(tx, expenseID, item.Shares); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create expense shares"})
+			return
+		}
+		createdIDs = append(createdIDs, int(expenseID))
 	}
 
 	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save invoice"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save expenses"})
 		return
 	}
 
-	inv, err := h.fetchInvoice(int(invoiceID))
-	if err != nil {
-		c.JSON(http.StatusCreated, gin.H{"id": invoiceID})
-		return
+	created := make([]models.Expense, 0, len(createdIDs))
+	for _, id := range createdIDs {
+		exp, err := h.fetchExpense(id)
+		if err != nil {
+			continue
+		}
+		created = append(created, exp)
 	}
 
-	c.JSON(http.StatusCreated, inv)
+	c.JSON(http.StatusCreated, created)
 }
 
-func (h *Handler) UpdateInvoice(c *gin.Context) {
+func (h *Handler) UpdateExpense(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid invoice id"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid expense id"})
 		return
 	}
 
-	var req models.UpdateInvoiceRequest
+	var req models.UpdateExpenseRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -686,6 +645,12 @@ func (h *Handler) UpdateInvoice(c *gin.Context) {
 
 	if err := validateShares(req.Shares); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
 		return
 	}
 
@@ -696,14 +661,9 @@ func (h *Handler) UpdateInvoice(c *gin.Context) {
 	}
 
 	var exists int
-	if err := h.db.QueryRow(`SELECT COUNT(*) FROM invoices WHERE id = ?`, id).Scan(&exists); err != nil || exists == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "invoice not found"})
+	if err := h.db.QueryRow(`SELECT COUNT(*) FROM expenses WHERE id = ?`, id).Scan(&exists); err != nil || exists == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "expense not found"})
 		return
-	}
-
-	var total float64
-	for _, item := range req.Items {
-		total += item.Amount
 	}
 
 	tx, err := h.db.Begin()
@@ -714,57 +674,41 @@ func (h *Handler) UpdateInvoice(c *gin.Context) {
 	defer tx.Rollback()
 
 	if _, err := tx.Exec(
-		`UPDATE invoices SET person_id = ?, shop_id = ?, date = ?, total = ? WHERE id = ?`,
-		req.PersonID, req.ShopID, req.Date, total, id,
+		`UPDATE expenses SET person_id = ?, shop_id = ?, date = ?, name = ?, amount = ? WHERE id = ?`,
+		req.PersonID, req.ShopID, req.Date, name, req.Amount, id,
 	); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update invoice"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update expense"})
 		return
 	}
 
-	if _, err := tx.Exec(`DELETE FROM invoice_items WHERE invoice_id = ?`, id); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to replace invoice items"})
+	if _, err := tx.Exec(`DELETE FROM expense_shares WHERE expense_id = ?`, id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to replace expense shares"})
 		return
 	}
 
-	for _, item := range req.Items {
-		_, err := tx.Exec(
-			`INSERT INTO invoice_items (invoice_id, description, amount, quantity) VALUES (?, ?, ?, ?)`,
-			id, strings.TrimSpace(item.Description), item.Amount, 1,
-		)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create invoice items"})
-			return
-		}
-	}
-
-	if _, err := tx.Exec(`DELETE FROM invoice_shares WHERE invoice_id = ?`, id); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to replace invoice shares"})
-		return
-	}
-
-	if err := insertShares(tx, int64(id), req.Shares); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create invoice shares"})
+	if err := insertExpenseShares(tx, int64(id), req.Shares); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create expense shares"})
 		return
 	}
 
 	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save invoice"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save expense"})
 		return
 	}
 
-	inv, err := h.fetchInvoice(id)
+	exp, err := h.fetchExpense(id)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"id": id})
 		return
 	}
 
-	c.JSON(http.StatusOK, inv)
+	c.JSON(http.StatusOK, exp)
 }
 
-func (h *Handler) DeleteInvoice(c *gin.Context) {
+func (h *Handler) DeleteExpense(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid invoice id"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid expense id"})
 		return
 	}
 
@@ -775,25 +719,20 @@ func (h *Handler) DeleteInvoice(c *gin.Context) {
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec(`DELETE FROM invoice_shares WHERE invoice_id = ?`, id); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete invoice shares"})
+	if _, err := tx.Exec(`DELETE FROM expense_shares WHERE expense_id = ?`, id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete expense shares"})
 		return
 	}
 
-	if _, err := tx.Exec(`DELETE FROM invoice_items WHERE invoice_id = ?`, id); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete invoice items"})
-		return
-	}
-
-	result, err := tx.Exec(`DELETE FROM invoices WHERE id = ?`, id)
+	result, err := tx.Exec(`DELETE FROM expenses WHERE id = ?`, id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete invoice"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete expense"})
 		return
 	}
 
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "invoice not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "expense not found"})
 		return
 	}
 

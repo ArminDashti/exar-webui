@@ -7,7 +7,7 @@ import JalaliDateInput from '../components/JalaliDateInput.vue'
 
 const loading = ref(true)
 const error = ref('')
-const stats = ref({ total: 0, by_person: [], by_shop: [] })
+const stats = ref({ by_month: [] })
 
 const filters = reactive({
   from_date: '',
@@ -20,8 +20,8 @@ async function load() {
   try {
     const from = filters.from_date ? jalaliToGregorian(filters.from_date) : undefined
     const to = filters.to_date ? jalaliToGregorian(filters.to_date) : undefined
-    if (filters.from_date && !from) throw new Error('Invalid from date (use YYYY/MM/DD Jalali)')
-    if (filters.to_date && !to) throw new Error('Invalid to date (use YYYY/MM/DD Jalali)')
+    if (filters.from_date && !from) throw new Error('Invalid from date')
+    if (filters.to_date && !to) throw new Error('Invalid to date')
 
     stats.value = await api.getStats({
       from_date: from,
@@ -45,12 +45,12 @@ onMounted(load)
       <JalaliDateInput
         v-model="filters.from_date"
         label="From"
-        :input-class="'mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500'"
+        :input-class="'mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100'"
       />
       <JalaliDateInput
         v-model="filters.to_date"
         label="To"
-        :input-class="'mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500'"
+        :input-class="'mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100'"
       />
       <div class="flex items-end">
         <button
@@ -70,42 +70,32 @@ onMounted(load)
     </div>
 
     <div v-if="loading" class="py-12 text-center text-zinc-500">Loading…</div>
-    <template v-else>
-      <section class="rounded-xl border border-zinc-800 bg-zinc-950 p-5">
-        <h3 class="text-sm font-medium text-zinc-400">Total spend</h3>
-        <p class="mt-2 text-3xl font-semibold text-white">{{ formatMoney(stats.total) }}</p>
-      </section>
-
-      <section class="rounded-xl border border-zinc-800 bg-zinc-950 p-5">
-        <h3 class="mb-3 text-sm font-medium text-zinc-400">By person</h3>
-        <ul class="divide-y divide-zinc-800">
-          <li
-            v-for="row in stats.by_person"
-            :key="row.person_id"
-            class="flex items-center justify-between py-3"
-          >
-            <span class="text-sm text-zinc-100">{{ row.person_name }}</span>
-            <span class="text-sm font-semibold text-white">{{ formatMoney(row.total) }}</span>
-          </li>
-        </ul>
-      </section>
-
-      <section class="rounded-xl border border-zinc-800 bg-zinc-950 p-5">
-        <h3 class="mb-3 text-sm font-medium text-zinc-400">By shop</h3>
-        <div v-if="!stats.by_shop?.length" class="py-6 text-center text-sm text-zinc-500">
-          No shop spend in this range.
-        </div>
-        <ul v-else class="divide-y divide-zinc-800">
-          <li
-            v-for="row in stats.by_shop"
-            :key="row.shop_id"
-            class="flex items-center justify-between py-3"
-          >
-            <span class="text-sm text-zinc-100">{{ row.shop_name }}</span>
-            <span class="text-sm font-semibold text-white">{{ formatMoney(row.total) }}</span>
-          </li>
-        </ul>
-      </section>
-    </template>
+    <section v-else class="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-950">
+      <table class="min-w-full text-left text-sm">
+        <thead class="border-b border-zinc-800 text-xs uppercase text-zinc-500">
+          <tr>
+            <th class="px-4 py-3 font-medium">Month</th>
+            <th class="px-4 py-3 font-medium">Armin</th>
+            <th class="px-4 py-3 font-medium">Ramin</th>
+            <th class="px-4 py-3 font-medium">Total</th>
+            <th class="px-4 py-3 font-medium">Armin share</th>
+            <th class="px-4 py-3 font-medium">Ramin share</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-800">
+          <tr v-if="!stats.by_month?.length">
+            <td colspan="6" class="px-4 py-10 text-center text-zinc-500">No data in this range.</td>
+          </tr>
+          <tr v-for="row in stats.by_month" :key="row.month" class="text-zinc-200">
+            <td class="px-4 py-3 font-medium text-white">{{ row.month }}</td>
+            <td class="px-4 py-3">{{ formatMoney(row.armin) }}</td>
+            <td class="px-4 py-3">{{ formatMoney(row.ramin) }}</td>
+            <td class="px-4 py-3">{{ formatMoney(row.total) }}</td>
+            <td class="px-4 py-3">{{ formatMoney(row.armin_share) }}</td>
+            <td class="px-4 py-3">{{ formatMoney(row.ramin_share) }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
   </div>
 </template>
