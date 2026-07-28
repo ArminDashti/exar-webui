@@ -36,10 +36,17 @@ func main() {
 		api.GET("/persons", h.ListPersons)
 		api.GET("/shops", h.ListShops)
 		api.POST("/shops", h.CreateShop)
+		api.PUT("/shops/:id", h.UpdateShop)
 		api.DELETE("/shops/:id", h.DeleteShop)
+		api.GET("/items", h.ListItems)
+		api.POST("/items", h.CreateItem)
+		api.PUT("/items/:id", h.UpdateItem)
+		api.DELETE("/items/:id", h.DeleteItem)
+		api.GET("/stats", h.GetStats)
 		api.GET("/invoices", h.ListInvoices)
 		api.GET("/invoices/:id", h.GetInvoice)
 		api.POST("/invoices", h.CreateInvoice)
+		api.PUT("/invoices/:id", h.UpdateInvoice)
 		api.DELETE("/invoices/:id", h.DeleteInvoice)
 	}
 
@@ -50,6 +57,16 @@ func main() {
 				c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 				return
 			}
+
+			rel := strings.TrimPrefix(c.Request.URL.Path, "/")
+			if rel != "" && !strings.Contains(rel, "..") {
+				candidate := filepath.Join(staticDir, filepath.FromSlash(rel))
+				if fi, err := os.Stat(candidate); err == nil && !fi.IsDir() {
+					c.File(candidate)
+					return
+				}
+			}
+
 			c.File(filepath.Join(staticDir, "index.html"))
 		})
 	}

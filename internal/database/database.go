@@ -32,6 +32,11 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("ping sqlite: %w", err)
 	}
 
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("enable foreign keys: %w", err)
+	}
+
 	if err := migrate(db); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -48,6 +53,11 @@ func migrate(db *sql.DB) error {
 	);
 
 	CREATE TABLE IF NOT EXISTS shops (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT NOT NULL UNIQUE
+	);
+
+	CREATE TABLE IF NOT EXISTS items (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		name TEXT NOT NULL UNIQUE
 	);
@@ -71,6 +81,15 @@ func migrate(db *sql.DB) error {
 		FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE
 	);
 
+	CREATE TABLE IF NOT EXISTS invoice_shares (
+		invoice_id INTEGER NOT NULL,
+		person_id INTEGER NOT NULL,
+		share REAL NOT NULL,
+		PRIMARY KEY (invoice_id, person_id),
+		FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE,
+		FOREIGN KEY (person_id) REFERENCES persons(id)
+	);
+
 	CREATE INDEX IF NOT EXISTS idx_invoices_person ON invoices(person_id);
 	CREATE INDEX IF NOT EXISTS idx_invoices_date ON invoices(date);
 	CREATE INDEX IF NOT EXISTS idx_invoices_shop ON invoices(shop_id);
@@ -80,7 +99,27 @@ func migrate(db *sql.DB) error {
 		return fmt.Errorf("migrate schema: %w", err)
 	}
 
-	return seedPersons(db)
+	if err := seedPersons(db); err != nil {
+		return err
+	}
+
+	return backfillInvoiceShares(db)
+}
+
+func backfillInvoiceShares(db *sql.DB) error {
+	_, err := db.Exec(`
+		INSERT INTO invoice_shares (invoice_id, person_id, share)
+		SELECT i.id, p.id, 0.5
+		FROM invoices i
+		CROSS JOIN persons p
+		WHERE NOT EXISTS (
+			SELECT 1 FROM invoice_shares s WHERE s.invoice_id = i.id
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("backfill invoice shares: %w", err)
+	}
+	return nil
 }
 
 func seedPersons(db *sql.DB) error {
@@ -88,8 +127,8 @@ func seedPersons(db *sql.DB) error {
 		id   int
 		name string
 	}{
-		{1, "Person 1"},
-		{2, "Person 2"},
+		{1, "Armin"},
+		{2, "Ramin"},
 	}
 
 	for _, p := range persons {

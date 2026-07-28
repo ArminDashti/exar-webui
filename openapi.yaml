@@ -3,9 +3,10 @@ info:
   title: Daily Expenses API
   description: |
     REST API for the Daily Expenses application. Tracks shared spending for two
-    people (Person 1 and Person 2), shops, and invoices with line items.
+    people (Armin and Ramin), shops, catalog items, and invoices with line items.
 
-    All monetary values are in USD. Dates use ISO 8601 calendar dates (`YYYY-MM-DD`).
+    All monetary values are in USD. Dates in the API use ISO 8601 Gregorian
+    calendar dates (`YYYY-MM-DD`). The web UI displays Jalali (Persian) dates.
   version: 1.0.0
   contact:
     name: Daily Expenses
@@ -18,9 +19,13 @@ servers:
 
 tags:
   - name: Persons
-    description: Fixed list of two people who can pay expenses
+    description: Fixed list of two people who can pay expenses (Armin, Ramin)
   - name: Shops
     description: Store and vendor names
+  - name: Items
+    description: Catalog of item names for expense autocomplete
+  - name: Stats
+    description: Aggregated spend totals
   - name: Invoices
     description: Expense records with line items
 
@@ -29,7 +34,7 @@ paths:
     get:
       tags: [Persons]
       summary: List persons
-      description: Returns the two fixed persons (IDs 1 and 2).
+      description: Returns the two fixed persons (Armin and Ramin).
       operationId: listPersons
       responses:
         "200":
@@ -42,9 +47,9 @@ paths:
                   $ref: "#/components/schemas/Person"
               example:
                 - id: 1
-                  name: Person 1
+                  name: Armin
                 - id: 2
-                  name: Person 2
+                  name: Ramin
         "500":
           $ref: "#/components/responses/InternalServerError"
 
@@ -100,6 +105,43 @@ paths:
           $ref: "#/components/responses/InternalServerError"
 
   /shops/{id}:
+    put:
+      tags: [Shops]
+      summary: Update shop
+      description: Renames a shop by ID. Names must be unique.
+      operationId: updateShop
+      parameters:
+        - $ref: "#/components/parameters/ShopId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateShopRequest"
+            example:
+              name: Corner Market
+      responses:
+        "200":
+          description: Shop updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Shop"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Shop name already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: shop already exists
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
     delete:
       tags: [Shops]
       summary: Delete shop
@@ -123,6 +165,153 @@ paths:
                 $ref: "#/components/schemas/Error"
               example:
                 error: shop is used by invoices
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /items:
+    get:
+      tags: [Items]
+      summary: List or search items
+      description: |
+        Returns catalog items ordered by name. When `q` is provided with fewer
+        than 3 characters, an empty array is returned. With 3+ characters,
+        results are filtered with a case-insensitive substring match.
+      operationId: listItems
+      parameters:
+        - name: q
+          in: query
+          description: Search query (min 3 characters to filter)
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Item"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    post:
+      tags: [Items]
+      summary: Create item
+      description: Adds a catalog item name. Names must be unique.
+      operationId: createItem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateItemRequest"
+            example:
+              name: Milk
+      responses:
+        "201":
+          description: Item created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Item"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: Item name already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: item already exists
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /items/{id}:
+    put:
+      tags: [Items]
+      summary: Update item
+      description: Renames a catalog item by ID. Names must be unique.
+      operationId: updateItem
+      parameters:
+        - $ref: "#/components/parameters/ItemId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateItemRequest"
+            example:
+              name: Organic Milk
+      responses:
+        "200":
+          description: Item updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Item"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Item name already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: item already exists
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    delete:
+      tags: [Items]
+      summary: Delete item
+      description: Deletes a catalog item by ID. Always allowed (no invoice FK).
+      operationId: deleteItem
+      parameters:
+        - $ref: "#/components/parameters/ItemId"
+      responses:
+        "204":
+          description: Item deleted
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /stats:
+    get:
+      tags: [Stats]
+      summary: Get spend statistics
+      description: |
+        Returns total spend, share-weighted totals by person, and totals by shop.
+        Optional Gregorian date range filters apply to all aggregates. Person
+        totals use `invoice_total * share` for each person.
+      operationId: getStats
+      parameters:
+        - name: from_date
+          in: query
+          description: Include invoices on or after this date (`YYYY-MM-DD`)
+          schema:
+            type: string
+            format: date
+        - name: to_date
+          in: query
+          description: Include invoices on or before this date (`YYYY-MM-DD`)
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Stats"
         "500":
           $ref: "#/components/responses/InternalServerError"
 
@@ -169,9 +358,10 @@ paths:
       tags: [Invoices]
       summary: Create invoice
       description: |
-        Creates an invoice and its line items in a single transaction. The
-        invoice total is computed as the sum of `amount × quantity` for each
-        item. Quantity defaults to 1 when omitted or zero/negative.
+        Creates an invoice, its line items, and per-person shares in a single
+        transaction. The invoice total is the sum of each item `amount`.
+        Quantity is always stored as `1`. Shares must include every person and
+        sum to 1 (within 0.001).
       operationId: createInvoice
       requestBody:
         required: true
@@ -186,10 +376,13 @@ paths:
               items:
                 - description: Milk
                   amount: 4.99
-                  quantity: 2
                 - description: Bread
                   amount: 3.50
-                  quantity: 1
+              shares:
+                - person_id: 1
+                  share: 0.3
+                - person_id: 2
+                  share: 0.7
       responses:
         "201":
           description: Invoice created
@@ -205,7 +398,7 @@ paths:
                         type: integer
                     required: [id]
         "400":
-          description: Validation error or invalid person/shop
+          description: Validation error or invalid person/shop/shares
           content:
             application/json:
               schema:
@@ -217,6 +410,9 @@ paths:
                 invalidShop:
                   value:
                     error: invalid shop_id
+                invalidShares:
+                  value:
+                    error: shares must sum to 1
         "500":
           $ref: "#/components/responses/InternalServerError"
 
@@ -224,7 +420,7 @@ paths:
     get:
       tags: [Invoices]
       summary: Get invoice
-      description: Returns a single invoice with its line items.
+      description: Returns a single invoice with its line items and shares.
       operationId: getInvoice
       parameters:
         - $ref: "#/components/parameters/InvoiceId"
@@ -242,10 +438,39 @@ paths:
         "500":
           $ref: "#/components/responses/InternalServerError"
 
+    put:
+      tags: [Invoices]
+      summary: Update invoice
+      description: |
+        Replaces payer, shop, date, line items, and shares for an invoice in a
+        single transaction. Same validation as create.
+      operationId: updateInvoice
+      parameters:
+        - $ref: "#/components/parameters/InvoiceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateInvoiceRequest"
+      responses:
+        "200":
+          description: Invoice updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Invoice"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
     delete:
       tags: [Invoices]
       summary: Delete invoice
-      description: Deletes an invoice and all of its line items.
+      description: Deletes an invoice and all of its line items and shares.
       operationId: deleteInvoice
       parameters:
         - $ref: "#/components/parameters/InvoiceId"
@@ -266,6 +491,15 @@ components:
       in: path
       required: true
       description: Shop ID
+      schema:
+        type: integer
+        minimum: 1
+
+    ItemId:
+      name: id
+      in: path
+      required: true
+      description: Item ID
       schema:
         type: integer
         minimum: 1
@@ -315,6 +549,80 @@ components:
           minLength: 1
       required: [name]
 
+    UpdateShopRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+      required: [name]
+
+    Item:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+      required: [id, name]
+
+    CreateItemRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+      required: [name]
+
+    UpdateItemRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+      required: [name]
+
+    PersonTotal:
+      type: object
+      properties:
+        person_id:
+          type: integer
+          enum: [1, 2]
+        person_name:
+          type: string
+        total:
+          type: number
+          format: double
+      required: [person_id, person_name, total]
+
+    ShopTotal:
+      type: object
+      properties:
+        shop_id:
+          type: integer
+        shop_name:
+          type: string
+        total:
+          type: number
+          format: double
+      required: [shop_id, shop_name, total]
+
+    Stats:
+      type: object
+      properties:
+        total:
+          type: number
+          format: double
+        by_person:
+          type: array
+          items:
+            $ref: "#/components/schemas/PersonTotal"
+        by_shop:
+          type: array
+          items:
+            $ref: "#/components/schemas/ShopTotal"
+      required: [total, by_person, by_shop]
+
     InvoiceItem:
       type: object
       properties:
@@ -333,9 +641,37 @@ components:
         quantity:
           type: number
           format: double
-          description: Defaults to 1 when creating if omitted or not positive
+          description: Always 1 for new invoices (units not used)
           default: 1
       required: [description, amount]
+
+    InvoiceShare:
+      type: object
+      properties:
+        person_id:
+          type: integer
+          enum: [1, 2]
+        person_name:
+          type: string
+        share:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+      required: [person_id, share]
+
+    InvoiceShareInput:
+      type: object
+      properties:
+        person_id:
+          type: integer
+          enum: [1, 2]
+        share:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+      required: [person_id, share]
 
     Invoice:
       type: object
@@ -345,6 +681,7 @@ components:
         person_id:
           type: integer
           enum: [1, 2]
+          description: Who paid the bill
         shop_id:
           type: integer
         date:
@@ -353,7 +690,7 @@ components:
         total:
           type: number
           format: double
-          description: Sum of line item amounts (amount × quantity) in USD
+          description: Sum of line item amounts
         person_name:
           type: string
           description: Joined person name (read-only)
@@ -364,7 +701,11 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/InvoiceItem"
-      required: [person_id, shop_id, date, total, items]
+        shares:
+          type: array
+          items:
+            $ref: "#/components/schemas/InvoiceShare"
+      required: [person_id, shop_id, date, total, items, shares]
 
     CreateInvoiceItem:
       type: object
@@ -378,6 +719,7 @@ components:
         quantity:
           type: number
           format: double
+          description: Ignored; server always stores 1
           default: 1
       required: [description, amount]
 
@@ -398,7 +740,36 @@ components:
           minItems: 1
           items:
             $ref: "#/components/schemas/CreateInvoiceItem"
-      required: [person_id, shop_id, date, items]
+        shares:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/InvoiceShareInput"
+      required: [person_id, shop_id, date, items, shares]
+
+    UpdateInvoiceRequest:
+      type: object
+      properties:
+        person_id:
+          type: integer
+          enum: [1, 2]
+        shop_id:
+          type: integer
+          minimum: 1
+        date:
+          type: string
+          format: date
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CreateInvoiceItem"
+        shares:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/InvoiceShareInput"
+      required: [person_id, shop_id, date, items, shares]
 
   responses:
     BadRequest:

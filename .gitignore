@@ -5,6 +5,7 @@
 
 # --- auto: github-commit-push-all-repos ---
 .claude/worktrees/crazy-villani-fa123c/expenses-server.exe
+.claude/worktrees/crazy-villani-fa123c/expenses-server.exe bin/server bin/server.exe expenses-server.exe
 .claude/worktrees/crazy-villani-fa123c/expenses-server.exe bin/server expenses-server.exe
 bin/server
 expenses-server.exe
