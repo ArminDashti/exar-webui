@@ -4,7 +4,13 @@
     "stop": [
       {
         "command": "powershell -NoProfile -ExecutionPolicy Bypass -File .cursor/hooks/docker-install.ps1",
-        "timeout": 900
+        "timeout": 900,
+        "uuid": "ecf43f69-f063-439e-b21d-2654f6e335c6",
+        "last_updated": "2026-08-01 13:03:19",
+        "category": "",
+        "version": "1.0.0",
+        "author": "Armin Dashti",
+        "tags": []
       }
     ]
   }
