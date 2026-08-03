@@ -25,6 +25,7 @@ type Expense struct {
 	ID         int            `json:"id,omitempty"`
 	PersonID   int            `json:"person_id"`
 	ShopID     int            `json:"shop_id"`
+	ItemID     int            `json:"item_id"`
 	Date       string         `json:"date"`
 	Name       string         `json:"name"`
 	Amount     float64        `json:"amount"`
@@ -74,6 +75,11 @@ type CreateItemRequest struct {
 
 type UpdateItemRequest struct {
 	Name string `json:"name" binding:"required"`
+}
+
+type DuplicateCheckResponse struct {
+	Exists bool `json:"exists"`
+	Count  int  `json:"count"`
 }
 
 type MonthStats struct {

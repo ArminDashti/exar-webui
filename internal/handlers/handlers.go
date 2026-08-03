@@ -289,6 +289,16 @@ func (h *Handler) DeleteItem(c *gin.Context) {
 		return
 	}
 
+	var inUse int
+	if err := h.db.QueryRow(`SELECT COUNT(*) FROM expenses WHERE item_id = ?`, id).Scan(&inUse); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check item usage"})
+		return
+	}
+	if inUse > 0 {
+		c.JSON(http.StatusConflict, gin.H{"error": "item is used by expenses"})
+		return
+	}
+
 	result, err := h.db.Exec(`DELETE FROM items WHERE id = ?`, id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete item"})
@@ -402,6 +412,16 @@ func validateShares(shares []models.ExpenseShareInput) error {
 	return nil
 }
 
+func validateWholeAmount(amount float64) error {
+	if amount < 0 {
+		return errors.New("amount must be >= 0")
+	}
+	if amount != math.Trunc(amount) {
+		return errors.New("amount must be a whole number")
+	}
+	return nil
+}
+
 func insertExpenseShares(tx *sql.Tx, expenseID int64, shares []models.ExpenseShareInput) error {
 	for _, s := range shares {
 		_, err := tx.Exec(
@@ -415,12 +435,99 @@ func insertExpenseShares(tx *sql.Tx, expenseID int64, shares []models.ExpenseSha
 	return nil
 }
 
+func upsertItem(tx *sql.Tx, name string) (int64, error) {
+	var id int64
+	err := tx.QueryRow(`SELECT id FROM items WHERE name = ? COLLATE NOCASE`, name).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if err != sql.ErrNoRows {
+		return 0, err
+	}
+
+	result, err := tx.Exec(`INSERT INTO items (name) VALUES (?)`, name)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			if err := tx.QueryRow(`SELECT id FROM items WHERE name = ? COLLATE NOCASE`, name).Scan(&id); err != nil {
+				return 0, err
+			}
+			return id, nil
+		}
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+func (h *Handler) CheckDuplicateExpense(c *gin.Context) {
+	date := strings.TrimSpace(c.Query("date"))
+	if date == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "date is required"})
+		return
+	}
+
+	excludeID := strings.TrimSpace(c.Query("exclude_id"))
+	itemIDStr := strings.TrimSpace(c.Query("item_id"))
+	name := strings.TrimSpace(c.Query("name"))
+
+	var (
+		count int
+		err   error
+	)
+
+	switch {
+	case itemIDStr != "":
+		itemID, parseErr := strconv.Atoi(itemIDStr)
+		if parseErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid item_id"})
+			return
+		}
+		if excludeID != "" {
+			err = h.db.QueryRow(
+				`SELECT COUNT(*) FROM expenses WHERE item_id = ? AND date = ? AND id != ?`,
+				itemID, date, excludeID,
+			).Scan(&count)
+		} else {
+			err = h.db.QueryRow(
+				`SELECT COUNT(*) FROM expenses WHERE item_id = ? AND date = ?`,
+				itemID, date,
+			).Scan(&count)
+		}
+	case name != "":
+		if excludeID != "" {
+			err = h.db.QueryRow(
+				`SELECT COUNT(*) FROM expenses e
+				 JOIN items i ON i.id = e.item_id
+				 WHERE i.name = ? COLLATE NOCASE AND e.date = ? AND e.id != ?`,
+				name, date, excludeID,
+			).Scan(&count)
+		} else {
+			err = h.db.QueryRow(
+				`SELECT COUNT(*) FROM expenses e
+				 JOIN items i ON i.id = e.item_id
+				 WHERE i.name = ? COLLATE NOCASE AND e.date = ?`,
+				name, date,
+			).Scan(&count)
+		}
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "item_id or name is required"})
+		return
+	}
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check duplicate"})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.DuplicateCheckResponse{Exists: count > 0, Count: count})
+}
+
 func (h *Handler) ListExpenses(c *gin.Context) {
 	query := `
-		SELECT e.id, e.person_id, p.name, e.shop_id, s.name, e.date, e.name, e.amount
+		SELECT e.id, e.person_id, p.name, e.shop_id, s.name, e.item_id, i.name, e.date, e.amount
 		FROM expenses e
 		JOIN persons p ON p.id = e.person_id
 		JOIN shops s ON s.id = e.shop_id
+		JOIN items i ON i.id = e.item_id
 		WHERE 1=1
 	`
 	args := []any{}
@@ -451,7 +558,10 @@ func (h *Handler) ListExpenses(c *gin.Context) {
 	var expenseIDs []int
 	for rows.Next() {
 		var e models.Expense
-		if err := rows.Scan(&e.ID, &e.PersonID, &e.PersonName, &e.ShopID, &e.ShopName, &e.Date, &e.Name, &e.Amount); err != nil {
+		if err := rows.Scan(
+			&e.ID, &e.PersonID, &e.PersonName, &e.ShopID, &e.ShopName,
+			&e.ItemID, &e.Name, &e.Date, &e.Amount,
+		); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read expenses"})
 			return
 		}
@@ -532,12 +642,16 @@ func (h *Handler) GetExpense(c *gin.Context) {
 func (h *Handler) fetchExpense(id int) (models.Expense, error) {
 	var e models.Expense
 	err := h.db.QueryRow(`
-		SELECT e.id, e.person_id, p.name, e.shop_id, s.name, e.date, e.name, e.amount
+		SELECT e.id, e.person_id, p.name, e.shop_id, s.name, e.item_id, i.name, e.date, e.amount
 		FROM expenses e
 		JOIN persons p ON p.id = e.person_id
 		JOIN shops s ON s.id = e.shop_id
+		JOIN items i ON i.id = e.item_id
 		WHERE e.id = ?`, id,
-	).Scan(&e.ID, &e.PersonID, &e.PersonName, &e.ShopID, &e.ShopName, &e.Date, &e.Name, &e.Amount)
+	).Scan(
+		&e.ID, &e.PersonID, &e.PersonName, &e.ShopID, &e.ShopName,
+		&e.ItemID, &e.Name, &e.Date, &e.Amount,
+	)
 	if err != nil {
 		return e, err
 	}
@@ -575,6 +689,10 @@ func (h *Handler) CreateExpenses(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "item name is required"})
 			return
 		}
+		if err := validateWholeAmount(item.Amount); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
 	var shopExists int
@@ -592,9 +710,15 @@ func (h *Handler) CreateExpenses(c *gin.Context) {
 
 	createdIDs := make([]int, 0, len(req.Items))
 	for _, item := range req.Items {
+		name := strings.TrimSpace(item.Name)
+		itemID, err := upsertItem(tx, name)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to resolve item"})
+			return
+		}
 		result, err := tx.Exec(
-			`INSERT INTO expenses (person_id, shop_id, date, name, amount) VALUES (?, ?, ?, ?, ?)`,
-			req.PersonID, req.ShopID, req.Date, strings.TrimSpace(item.Name), item.Amount,
+			`INSERT INTO expenses (person_id, shop_id, item_id, date, amount) VALUES (?, ?, ?, ?, ?)`,
+			req.PersonID, req.ShopID, itemID, req.Date, item.Amount,
 		)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create expense"})
@@ -648,6 +772,11 @@ func (h *Handler) UpdateExpense(c *gin.Context) {
 		return
 	}
 
+	if err := validateWholeAmount(req.Amount); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
@@ -673,9 +802,15 @@ func (h *Handler) UpdateExpense(c *gin.Context) {
 	}
 	defer tx.Rollback()
 
+	itemID, err := upsertItem(tx, name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to resolve item"})
+		return
+	}
+
 	if _, err := tx.Exec(
-		`UPDATE expenses SET person_id = ?, shop_id = ?, date = ?, name = ?, amount = ? WHERE id = ?`,
-		req.PersonID, req.ShopID, req.Date, name, req.Amount, id,
+		`UPDATE expenses SET person_id = ?, shop_id = ?, item_id = ?, date = ?, amount = ? WHERE id = ?`,
+		req.PersonID, req.ShopID, itemID, req.Date, req.Amount, id,
 	); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update expense"})
 		return

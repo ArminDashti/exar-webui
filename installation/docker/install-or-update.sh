@@ -8,9 +8,7 @@ IMAGE_NAME="${IMAGE_NAME:-exar-web:latest}"
 CONTAINER_NAME="${CONTAINER_NAME:-exar-web}"
 APP_PORT="${APP_PORT:-8080}"
 DATA_DIR="${DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/exar-web/data}"
-BIN_DIR="$PROJECT_ROOT/bin"
-SERVER_BINARY="$BIN_DIR/server"
-DIST_DIR="$PROJECT_ROOT/dist"
+DOCKERFILE="$PROJECT_ROOT/dockerfile"
 
 log() { printf '[docker-install] %s\n' "$*"; }
 err() { printf '[docker-install] ERROR: %s\n' "$*" >&2; }
@@ -23,42 +21,21 @@ need_cmd() {
 }
 
 need_cmd docker
-need_cmd go
-need_cmd npm
 
 if ! docker info >/dev/null 2>&1; then
   err "docker daemon is not running or not accessible"
   exit 1
 fi
 
-mkdir -p "$BIN_DIR" "$DATA_DIR"
-
-log "Building frontend assets ..."
-(
-  cd "$PROJECT_ROOT"
-  if [[ ! -f node_modules/vite/bin/vite.js ]]; then
-    npm install
-  fi
-  npm run build
-)
-
-log "Building backend binary ..."
-(
-  cd "$PROJECT_ROOT"
-  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o "$SERVER_BINARY" ./cmd/server
-)
-
-if [[ ! -f "$SERVER_BINARY" ]]; then
-  err "backend binary not found: $SERVER_BINARY"
-  exit 1
-fi
-if [[ ! -d "$DIST_DIR" ]]; then
-  err "frontend build output not found: $DIST_DIR"
+if [[ ! -f "$DOCKERFILE" ]]; then
+  err "dockerfile not found: $DOCKERFILE"
   exit 1
 fi
 
-log "Building Docker image $IMAGE_NAME ..."
-docker build -t "$IMAGE_NAME" "$PROJECT_ROOT"
+mkdir -p "$DATA_DIR"
+
+log "Building Docker image $IMAGE_NAME (multi-stage) ..."
+docker build -f "$DOCKERFILE" -t "$IMAGE_NAME" "$PROJECT_ROOT"
 
 if docker ps -a --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"; then
   log "Container $CONTAINER_NAME exists. Replacing with updated image ..."

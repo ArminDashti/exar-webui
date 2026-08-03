@@ -13,7 +13,7 @@ src/router.js               # Nested /expenses/add|/list routes
 src/components/JalaliDateInput.vue  # Jalali calendar date picker
 src/views/ExpensesLayout.vue        # Expenses Add|List tabs
 src/views/ExpenseAddView.vue        # Multi-row add form
-src/views/ExpenseListView.vue       # Flat expense list + inline edit
+src/views/ExpenseListView.vue       # Expense table grid + inline edit
 src/views/StatsView.vue             # Monthly stats grid
 src/views/ShopsView.vue / ItemsView.vue  # Catalog CRUD
 src/utils/dates.js / money.js       # Jalali helpers; integer money format

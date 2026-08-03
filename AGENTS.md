@@ -11,6 +11,7 @@
 
 - exar-web is a shared expense app for two people (Armin `person_id` 1, Ramin `person_id` 2) with per-item share splits.
 - Production hostname is `exar.xaigrok.ir`; remote Docker deploy uses `ssh t3` and Docker network `exar-net`.
-- `POST /api/items` maintains the item-name catalog for autocomplete; expense rows store the name as text with no FK to `items`.
-- `POST /api/expenses` is the real spend write (`expenses` + `expense_shares`); catalog upsert is currently frontend-orchestrated and is preferred on the backend.
+- Expenses store `item_id` FK to the items catalog; renaming an item applies to all expenses via JOIN.
+- `POST /api/expenses` upserts catalog item names and writes `expenses` + `expense_shares`.
+- Amounts must be whole numbers; share inputs step by `0.1`.
 - Expense UI is nested under Expenses with add and list child pages; stats settle amounts owed between Armin and Ramin.

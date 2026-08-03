@@ -7,9 +7,7 @@ $AppPort = if ($env:APP_PORT) { $env:APP_PORT } else { '8080' }
 $DataDir = if ($env:DATA_DIR) { $env:DATA_DIR } else { Join-Path $env:LOCALAPPDATA 'exar-web\data' }
 
 $ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
-$BinDir = Join-Path $ProjectRoot 'bin'
-$ServerBinary = Join-Path $BinDir 'server'
-$DistDir = Join-Path $ProjectRoot 'dist'
+$Dockerfile = Join-Path $ProjectRoot 'dockerfile'
 
 function Write-Log([string]$Message) {
     Write-Host "[docker-install] $Message"
@@ -27,8 +25,6 @@ function Need-Command([string]$Name) {
 }
 
 Need-Command docker
-Need-Command go
-Need-Command npm
 
 try {
     docker info *> $null
@@ -42,51 +38,15 @@ catch {
     exit 1
 }
 
-New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+if (-not (Test-Path -LiteralPath $Dockerfile)) {
+    Write-Err "dockerfile not found: $Dockerfile"
+    exit 1
+}
+
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
 
-Write-Log 'Building frontend assets ...'
-Push-Location $ProjectRoot
-try {
-    $viteBinary = Join-Path $ProjectRoot 'node_modules\vite\bin\vite.js'
-    if (-not (Test-Path $viteBinary)) {
-        npm install
-        if ($LASTEXITCODE -ne 0) {
-            Write-Err 'npm install failed'
-            exit $LASTEXITCODE
-        }
-    }
-    npm run build
-    if ($LASTEXITCODE -ne 0) {
-        Write-Err 'npm run build failed'
-        exit $LASTEXITCODE
-    }
-
-    Write-Log 'Building backend binary ...'
-    $env:CGO_ENABLED = '0'
-    $env:GOOS = 'linux'
-    $env:GOARCH = 'amd64'
-    go build -trimpath -ldflags '-s -w' -o $ServerBinary ./cmd/server
-    if ($LASTEXITCODE -ne 0) {
-        Write-Err 'go build failed'
-        exit $LASTEXITCODE
-    }
-}
-finally {
-    Pop-Location
-}
-
-if (-not (Test-Path $ServerBinary)) {
-    Write-Err "backend binary not found: $ServerBinary"
-    exit 1
-}
-if (-not (Test-Path $DistDir)) {
-    Write-Err "frontend build output not found: $DistDir"
-    exit 1
-}
-
-Write-Log "Building Docker image $ImageName ..."
-docker build -t $ImageName $ProjectRoot
+Write-Log "Building Docker image $ImageName (multi-stage) ..."
+docker build -f $Dockerfile -t $ImageName $ProjectRoot
 if ($LASTEXITCODE -ne 0) {
     Write-Err 'docker build failed'
     exit $LASTEXITCODE

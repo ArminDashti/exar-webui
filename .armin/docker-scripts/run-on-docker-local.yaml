@@ -3,7 +3,7 @@
 stack_name: exar
 image_tag: exar-web:latest
 compose_file: ../../docker-compose.yml
-dockerfile: ../../Dockerfile
+dockerfile: ../../dockerfile
 docker_network: exar-net
 internal_port: "8080"
 publish_port: "8084"

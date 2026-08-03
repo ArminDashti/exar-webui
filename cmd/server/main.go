@@ -43,6 +43,7 @@ func main() {
 		api.PUT("/items/:id", h.UpdateItem)
 		api.DELETE("/items/:id", h.DeleteItem)
 		api.GET("/stats", h.GetStats)
+		api.GET("/expenses/check-duplicate", h.CheckDuplicateExpense)
 		api.GET("/expenses", h.ListExpenses)
 		api.GET("/expenses/:id", h.GetExpense)
 		api.POST("/expenses", h.CreateExpenses)

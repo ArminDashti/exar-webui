@@ -10,6 +10,8 @@ const router = useRouter()
 const persons = ref([])
 const saving = ref(false)
 const error = ref('')
+const duplicateWarning = ref('')
+const duplicateAcknowledged = ref(false)
 
 const form = reactive({
   person_id: 1,
@@ -36,7 +38,7 @@ function emptyLine() {
 }
 
 const lineTotal = computed(() =>
-  form.items.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0)
+  form.items.reduce((sum, item) => sum + (parseWholeAmount(item.amount) || 0), 0)
 )
 
 const sharesValid = computed(() =>
@@ -47,6 +49,13 @@ const sharesValid = computed(() =>
     return Math.abs(a + r - 1) <= 0.001
   })
 )
+
+function parseWholeAmount(value) {
+  if (value === '' || value === null || value === undefined) return NaN
+  const text = String(value).trim()
+  if (!/^\d+$/.test(text)) return NaN
+  return Number(text)
+}
 
 function setShare(item, person, value) {
   const n = parseFloat(value)
@@ -67,10 +76,17 @@ function setShare(item, person, value) {
 
 function addLineItem() {
   form.items.push(emptyLine())
+  clearDuplicateWarning()
 }
 
 function removeLineItem(index) {
   if (form.items.length > 1) form.items.splice(index, 1)
+  clearDuplicateWarning()
+}
+
+function clearDuplicateWarning() {
+  duplicateWarning.value = ''
+  duplicateAcknowledged.value = false
 }
 
 function onShopInput() {
@@ -107,6 +123,7 @@ function hideShopSuggestions() {
 }
 
 function onItemNameInput(index) {
+  clearDuplicateWarning()
   const item = form.items[index]
   clearTimeout(itemTimers[index])
   const q = item.name.trim()
@@ -131,22 +148,13 @@ function pickItemSuggestion(index, name) {
   item.name = name
   item.suggestions = []
   item.showSuggestions = false
+  clearDuplicateWarning()
 }
 
 function hideItemSuggestions(index) {
   setTimeout(() => {
     if (form.items[index]) form.items[index].showSuggestions = false
   }, 150)
-}
-
-async function ensureCatalogItems(names) {
-  for (const name of names) {
-    try {
-      await api.createItem(name)
-    } catch (e) {
-      if (!/already exists/i.test(e.message)) throw e
-    }
-  }
 }
 
 async function resolveShopId() {
@@ -169,18 +177,45 @@ async function resolveShopId() {
   }
 }
 
+async function findDuplicateNames(gregorianDate) {
+  const duplicates = []
+  const seen = new Set()
+  for (const item of form.items) {
+    const name = item.name.trim()
+    if (!name || seen.has(name.toLowerCase())) continue
+    seen.add(name.toLowerCase())
+    const result = await api.checkDuplicateExpense({ name, date: gregorianDate })
+    if (result?.exists) duplicates.push(name)
+  }
+  return duplicates
+}
+
 async function submitExpense() {
   saving.value = true
   error.value = ''
   try {
     if (!sharesValid.value) throw new Error('Each item shares must sum to 1')
 
+    for (const item of form.items) {
+      const amount = parseWholeAmount(item.amount)
+      if (Number.isNaN(amount)) {
+        throw new Error('Amount must be a whole number (e.g. 100, 200)')
+      }
+    }
+
     const gregorianDate = jalaliToGregorian(form.date)
     if (!gregorianDate) throw new Error('Invalid date')
 
+    if (!duplicateAcknowledged.value) {
+      const duplicates = await findDuplicateNames(gregorianDate)
+      if (duplicates.length) {
+        duplicateWarning.value = `Same item already recorded on this date: ${duplicates.join(', ')}. Save again to continue.`
+        duplicateAcknowledged.value = true
+        return
+      }
+    }
+
     const shopId = await resolveShopId()
-    const names = form.items.map((item) => item.name.trim()).filter(Boolean)
-    await ensureCatalogItems(names)
 
     await api.createExpenses({
       person_id: Number(form.person_id),
@@ -188,7 +223,7 @@ async function submitExpense() {
       date: gregorianDate,
       items: form.items.map((item) => ({
         name: item.name.trim(),
-        amount: parseFloat(item.amount),
+        amount: parseWholeAmount(item.amount),
         shares: [
           { person_id: 1, share: parseFloat(item.armin_share) || 0 },
           { person_id: 2, share: parseFloat(item.ramin_share) || 0 },
@@ -225,6 +260,13 @@ onMounted(async () => {
       {{ error }}
     </div>
 
+    <div
+      v-if="duplicateWarning"
+      class="rounded-lg border border-amber-800 bg-amber-950/50 px-4 py-3 text-sm text-amber-200"
+    >
+      {{ duplicateWarning }}
+    </div>
+
     <form class="space-y-4 rounded-xl border border-zinc-800 bg-zinc-950 p-5" @submit.prevent="submitExpense">
       <div class="grid gap-4 sm:grid-cols-3">
         <label class="block text-sm">
@@ -238,7 +280,7 @@ onMounted(async () => {
           </select>
         </label>
 
-        <JalaliDateInput v-model="form.date" label="Date" required />
+        <JalaliDateInput v-model="form.date" label="Date" required @update:model-value="clearDuplicateWarning" />
 
         <div class="relative block text-sm">
           <span class="font-medium text-zinc-300">Shop</span>
@@ -314,9 +356,9 @@ onMounted(async () => {
             </div>
             <input
               v-model="item.amount"
-              type="number"
-              step="1"
-              min="0"
+              type="text"
+              inputmode="numeric"
+              pattern="[0-9]*"
               placeholder="Amount"
               class="rounded border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm text-zinc-100 sm:col-span-2"
               required
@@ -324,7 +366,7 @@ onMounted(async () => {
             <input
               :value="item.armin_share"
               type="number"
-              step="0.01"
+              step="0.1"
               min="0"
               max="1"
               placeholder="Armin share"
@@ -335,7 +377,7 @@ onMounted(async () => {
             <input
               :value="item.ramin_share"
               type="number"
-              step="0.01"
+              step="0.1"
               min="0"
               max="1"
               placeholder="Ramin share"
@@ -363,7 +405,7 @@ onMounted(async () => {
         :disabled="saving || !sharesValid"
         class="w-full rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-60 sm:w-auto"
       >
-        {{ saving ? 'Saving…' : 'Save' }}
+        {{ saving ? 'Saving…' : duplicateAcknowledged && duplicateWarning ? 'Save anyway' : 'Save' }}
       </button>
     </form>
   </div>

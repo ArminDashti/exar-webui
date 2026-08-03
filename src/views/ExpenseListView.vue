@@ -11,6 +11,8 @@ const persons = ref([])
 const expenses = ref([])
 const loading = ref(true)
 const error = ref('')
+const duplicateWarning = ref('')
+const duplicateAcknowledged = ref(false)
 const editingId = ref(null)
 const saving = ref(false)
 
@@ -38,6 +40,13 @@ let shopTimer = null
 const grandTotal = computed(() =>
   (expenses.value ?? []).reduce((sum, e) => sum + e.amount, 0)
 )
+
+function parseWholeAmount(value) {
+  if (value === '' || value === null || value === undefined) return NaN
+  const text = String(value).trim()
+  if (!/^\d+$/.test(text)) return NaN
+  return Number(text)
+}
 
 function gregorianFilter() {
   const from = filters.from_date ? jalaliToGregorian(filters.from_date) : undefined
@@ -89,6 +98,11 @@ function setEditShare(person, value) {
   }
 }
 
+function clearDuplicateWarning() {
+  duplicateWarning.value = ''
+  duplicateAcknowledged.value = false
+}
+
 function startEdit(exp) {
   editingId.value = exp.id
   editForm.person_id = exp.person_id
@@ -96,15 +110,17 @@ function startEdit(exp) {
   editForm.shop_id = exp.shop_id
   editForm.date = toJalaliDisplay(exp.date)
   editForm.name = exp.name
-  editForm.amount = exp.amount
+  editForm.amount = String(Math.trunc(exp.amount))
   editForm.armin_share = shareOf(exp, 1)
   editForm.ramin_share = shareOf(exp, 2)
   editForm.shopSuggestions = []
   editForm.showShopSuggestions = false
+  clearDuplicateWarning()
 }
 
 function cancelEdit() {
   editingId.value = null
+  clearDuplicateWarning()
 }
 
 function onShopInput() {
@@ -155,26 +171,51 @@ async function saveEdit() {
   saving.value = true
   error.value = ''
   try {
+    const amount = parseWholeAmount(editForm.amount)
+    if (Number.isNaN(amount)) {
+      throw new Error('Amount must be a whole number (e.g. 100, 200)')
+    }
+
+    const a = parseFloat(editForm.armin_share)
+    const r = parseFloat(editForm.ramin_share)
+    if (Number.isNaN(a) || Number.isNaN(r) || Math.abs(a + r - 1) > 0.001) {
+      throw new Error('Shares must sum to 1')
+    }
+
     const gregorianDate = jalaliToGregorian(editForm.date)
     if (!gregorianDate) throw new Error('Invalid date')
-    const shopId = await resolveShopId()
-    try {
-      await api.createItem(editForm.name.trim())
-    } catch (e) {
-      if (!/already exists/i.test(e.message)) throw e
+
+    const name = editForm.name.trim()
+    if (!name) throw new Error('Item is required')
+
+    if (!duplicateAcknowledged.value) {
+      const result = await api.checkDuplicateExpense({
+        name,
+        date: gregorianDate,
+        exclude_id: editingId.value,
+      })
+      if (result?.exists) {
+        duplicateWarning.value =
+          'Same item already recorded on this date. Save again to continue.'
+        duplicateAcknowledged.value = true
+        return
+      }
     }
+
+    const shopId = await resolveShopId()
     await api.updateExpense(editingId.value, {
       person_id: Number(editForm.person_id),
       shop_id: Number(shopId),
       date: gregorianDate,
-      name: editForm.name.trim(),
-      amount: parseFloat(editForm.amount),
+      name,
+      amount,
       shares: [
         { person_id: 1, share: parseFloat(editForm.armin_share) || 0 },
         { person_id: 2, share: parseFloat(editForm.ramin_share) || 0 },
       ],
     })
     editingId.value = null
+    clearDuplicateWarning()
     await loadData()
   } catch (e) {
     error.value = e.message
@@ -215,6 +256,13 @@ onMounted(loadData)
       {{ error }}
     </div>
 
+    <div
+      v-if="duplicateWarning"
+      class="rounded-lg border border-amber-800 bg-amber-950/50 px-4 py-3 text-sm text-amber-200"
+    >
+      {{ duplicateWarning }}
+    </div>
+
     <section class="rounded-xl border border-zinc-800 bg-zinc-950 p-5">
       <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <p class="text-sm text-zinc-400">
@@ -246,137 +294,152 @@ onMounted(loadData)
       <div v-else-if="expenses.length === 0" class="py-12 text-center text-zinc-500">
         No expenses yet.
       </div>
-      <ul v-else class="mt-4 divide-y divide-zinc-800">
-        <li v-for="exp in expenses" :key="exp.id" class="py-4">
-          <div
-            v-if="editingId === exp.id"
-            class="space-y-3 rounded-lg border border-zinc-700 bg-zinc-900 p-4"
-          >
-            <div class="grid gap-3 sm:grid-cols-3">
-              <label class="block text-sm">
-                <span class="text-zinc-400">Paid by</span>
-                <select
-                  v-model="editForm.person_id"
-                  class="mt-1 w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm text-zinc-100"
-                >
-                  <option v-for="p in persons" :key="p.id" :value="p.id">{{ p.name }}</option>
-                </select>
-              </label>
-              <JalaliDateInput v-model="editForm.date" label="Date" required />
-              <div class="relative block text-sm">
-                <span class="text-zinc-400">Shop</span>
-                <input
-                  v-model="editForm.shop_name"
-                  type="text"
-                  class="mt-1 w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm text-zinc-100"
-                  @input="onShopInput"
-                  @blur="editForm.showShopSuggestions = false"
-                />
-                <ul
-                  v-if="editForm.showShopSuggestions && editForm.shopSuggestions.length"
-                  class="absolute z-10 mt-1 max-h-40 w-full overflow-auto rounded border border-zinc-700 bg-zinc-950 shadow-lg"
-                >
-                  <li
-                    v-for="s in editForm.shopSuggestions"
-                    :key="s.id"
-                    class="cursor-pointer px-3 py-2 text-sm hover:bg-zinc-800"
-                    @mousedown.prevent="pickShop(s)"
+      <div v-else class="mt-4 overflow-x-auto">
+        <table class="min-w-full divide-y divide-zinc-800 text-left text-sm">
+          <thead class="text-xs uppercase tracking-wide text-zinc-500">
+            <tr>
+              <th class="px-3 py-2 font-medium">Person</th>
+              <th class="px-3 py-2 font-medium">Item</th>
+              <th class="px-3 py-2 font-medium">Shop</th>
+              <th class="px-3 py-2 font-medium">Date</th>
+              <th class="px-3 py-2 font-medium">Share (Armin)</th>
+              <th class="px-3 py-2 font-medium">Share (Ramin)</th>
+              <th class="px-3 py-2 font-medium">Amount</th>
+              <th class="px-3 py-2 font-medium"></th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-zinc-800">
+            <tr v-for="exp in expenses" :key="exp.id" class="align-top text-zinc-200">
+              <td colspan="8" v-if="editingId === exp.id" class="px-3 py-3">
+                <div class="space-y-3 rounded-lg border border-zinc-700 bg-zinc-900 p-4">
+                  <div class="grid gap-3 sm:grid-cols-3">
+                    <label class="block text-sm">
+                      <span class="text-zinc-400">Person</span>
+                      <select
+                        v-model="editForm.person_id"
+                        class="mt-1 w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm text-zinc-100"
+                      >
+                        <option v-for="p in persons" :key="p.id" :value="p.id">{{ p.name }}</option>
+                      </select>
+                    </label>
+                    <JalaliDateInput
+                      v-model="editForm.date"
+                      label="Date"
+                      required
+                      @update:model-value="clearDuplicateWarning"
+                    />
+                    <div class="relative block text-sm">
+                      <span class="text-zinc-400">Shop</span>
+                      <input
+                        v-model="editForm.shop_name"
+                        type="text"
+                        class="mt-1 w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm text-zinc-100"
+                        @input="onShopInput"
+                        @blur="editForm.showShopSuggestions = false"
+                      />
+                      <ul
+                        v-if="editForm.showShopSuggestions && editForm.shopSuggestions.length"
+                        class="absolute z-10 mt-1 max-h-40 w-full overflow-auto rounded border border-zinc-700 bg-zinc-950 shadow-lg"
+                      >
+                        <li
+                          v-for="s in editForm.shopSuggestions"
+                          :key="s.id"
+                          class="cursor-pointer px-3 py-2 text-sm hover:bg-zinc-800"
+                          @mousedown.prevent="pickShop(s)"
+                        >
+                          {{ s.name }}
+                        </li>
+                      </ul>
+                    </div>
+                  </div>
+                  <div class="grid gap-2 sm:grid-cols-4">
+                    <input
+                      v-model="editForm.name"
+                      type="text"
+                      placeholder="Item"
+                      class="rounded border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm text-zinc-100"
+                      @input="clearDuplicateWarning"
+                    />
+                    <input
+                      v-model="editForm.amount"
+                      type="text"
+                      inputmode="numeric"
+                      pattern="[0-9]*"
+                      placeholder="Amount"
+                      class="rounded border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm text-zinc-100"
+                    />
+                    <input
+                      :value="editForm.armin_share"
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      max="1"
+                      placeholder="Armin share"
+                      class="rounded border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm text-zinc-100"
+                      @input="setEditShare('armin', $event.target.value)"
+                    />
+                    <input
+                      :value="editForm.ramin_share"
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      max="1"
+                      placeholder="Ramin share"
+                      class="rounded border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm text-zinc-100"
+                      @input="setEditShare('ramin', $event.target.value)"
+                    />
+                  </div>
+                  <div class="flex gap-3">
+                    <button
+                      type="button"
+                      class="rounded-lg bg-sky-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-60"
+                      :disabled="saving"
+                      @click="saveEdit"
+                    >
+                      {{
+                        saving
+                          ? 'Saving…'
+                          : duplicateAcknowledged && duplicateWarning
+                            ? 'Save anyway'
+                            : 'Save'
+                      }}
+                    </button>
+                    <button
+                      type="button"
+                      class="text-sm text-zinc-400 hover:text-zinc-200"
+                      @click="cancelEdit"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </td>
+              <template v-else>
+                <td class="whitespace-nowrap px-3 py-3">{{ exp.person_name }}</td>
+                <td class="px-3 py-3">{{ exp.name }}</td>
+                <td class="px-3 py-3">{{ exp.shop_name }}</td>
+                <td class="whitespace-nowrap px-3 py-3">{{ toJalaliDisplay(exp.date) }}</td>
+                <td class="whitespace-nowrap px-3 py-3">{{ shareOf(exp, 1) }}</td>
+                <td class="whitespace-nowrap px-3 py-3">{{ shareOf(exp, 2) }}</td>
+                <td class="whitespace-nowrap px-3 py-3 font-medium text-white">
+                  {{ formatMoney(exp.amount) }}
+                </td>
+                <td class="whitespace-nowrap px-3 py-3 text-right">
+                  <button class="text-sky-400 hover:text-sky-300" @click="startEdit(exp)">
+                    Edit
+                  </button>
+                  <button
+                    class="ml-3 text-red-400 hover:text-red-300"
+                    @click="deleteExpense(exp.id)"
                   >
-                    {{ s.name }}
-                  </li>
-                </ul>
-              </div>
-            </div>
-            <div class="grid gap-2 sm:grid-cols-4">
-              <input
-                v-model="editForm.name"
-                type="text"
-                placeholder="Item"
-                class="rounded border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm text-zinc-100"
-              />
-              <input
-                v-model="editForm.amount"
-                type="number"
-                step="1"
-                min="0"
-                placeholder="Amount"
-                class="rounded border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm text-zinc-100"
-              />
-              <input
-                :value="editForm.armin_share"
-                type="number"
-                step="0.01"
-                min="0"
-                max="1"
-                placeholder="Armin share"
-                class="rounded border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm text-zinc-100"
-                @input="setEditShare('armin', $event.target.value)"
-              />
-              <input
-                :value="editForm.ramin_share"
-                type="number"
-                step="0.01"
-                min="0"
-                max="1"
-                placeholder="Ramin share"
-                class="rounded border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm text-zinc-100"
-                @input="setEditShare('ramin', $event.target.value)"
-              />
-            </div>
-            <div class="flex gap-3">
-              <button
-                type="button"
-                class="rounded-lg bg-sky-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-60"
-                :disabled="saving"
-                @click="saveEdit"
-              >
-                {{ saving ? 'Saving…' : 'Save' }}
-              </button>
-              <button type="button" class="text-sm text-zinc-400 hover:text-zinc-200" @click="cancelEdit">
-                Cancel
-              </button>
-            </div>
-          </div>
-          <div
-            v-else
-            class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"
-          >
-            <div class="min-w-0 flex-1">
-              <div class="flex flex-wrap items-center gap-2">
-                <span class="rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs font-medium text-sky-300">
-                  Paid by {{ exp.person_name }}
-                </span>
-                <span class="text-sm font-medium text-zinc-100">{{ exp.shop_name }}</span>
-                <span class="text-sm text-zinc-500">{{ toJalaliDisplay(exp.date) }}</span>
-              </div>
-              <p class="mt-2 text-sm text-zinc-200">
-                {{ exp.name }} — {{ formatMoney(exp.amount) }}
-              </p>
-              <ul class="mt-2 flex flex-wrap gap-2 text-xs text-zinc-500">
-                <li
-                  v-for="s in exp.shares"
-                  :key="s.person_id"
-                  class="rounded bg-zinc-900 px-2 py-0.5"
-                >
-                  {{ s.person_name }} {{ s.share }}
-                  ({{ formatMoney(exp.amount * s.share) }})
-                </li>
-              </ul>
-            </div>
-            <div class="flex items-center gap-3 sm:flex-col sm:items-end">
-              <span class="text-lg font-semibold text-white">{{ formatMoney(exp.amount) }}</span>
-              <div class="flex gap-3">
-                <button class="text-sm text-sky-400 hover:text-sky-300" @click="startEdit(exp)">
-                  Edit
-                </button>
-                <button class="text-sm text-red-400 hover:text-red-300" @click="deleteExpense(exp.id)">
-                  Delete
-                </button>
-              </div>
-            </div>
-          </div>
-        </li>
-      </ul>
+                    Delete
+                  </button>
+                </td>
+              </template>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
   </div>
 </template>

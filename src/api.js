@@ -42,6 +42,15 @@ export const api = {
     const query = qs.toString()
     return request(`/expenses${query ? `?${query}` : ''}`)
   },
+  checkDuplicateExpense: (params = {}) => {
+    const qs = new URLSearchParams()
+    if (params.name) qs.set('name', params.name)
+    if (params.item_id) qs.set('item_id', params.item_id)
+    if (params.date) qs.set('date', params.date)
+    if (params.exclude_id) qs.set('exclude_id', params.exclude_id)
+    const query = qs.toString()
+    return request(`/expenses/check-duplicate${query ? `?${query}` : ''}`)
+  },
   createExpenses: (data) => request('/expenses', { method: 'POST', body: JSON.stringify(data) }),
   updateExpense: (id, data) =>
     request(`/expenses/${id}`, { method: 'PUT', body: JSON.stringify(data) }),

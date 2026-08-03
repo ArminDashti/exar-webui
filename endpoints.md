@@ -90,7 +90,7 @@ Rename a shop.
 
 ## Items
 
-Catalog of item names used for expense name autocomplete. Expenses store the name as text (no foreign key).
+Catalog of item names. Expenses reference items via `item_id` foreign key; renaming an item (`PUT /items/:id`) applies to all expenses that use it.
 
 ### `GET /items`
 
@@ -98,7 +98,7 @@ Optional `q` search (minimum 3 characters).
 
 ### `POST /items` / `PUT /items/:id` / `DELETE /items/:id`
 
-Same create/rename/delete behavior as shops (unique names).
+Same create/rename/delete behavior as shops (unique names). Delete fails with `409` if the item is used by expenses.
 
 ---
 
@@ -142,6 +142,27 @@ Monthly totals in Jalali months (`YYYY/MM`).
 
 ## Expenses
 
+Each expense links to `persons`, `shops`, and `items` by foreign key. `name` in responses is joined from `items`. Amounts must be whole numbers (no decimals).
+
+### `GET /expenses/check-duplicate`
+
+Soft duplicate check for the same item on the same date. Does not block creates.
+
+**Query parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `date` | string | Gregorian `YYYY-MM-DD` (required) |
+| `name` | string | Item name (required if `item_id` omitted) |
+| `item_id` | int | Item id (required if `name` omitted) |
+| `exclude_id` | int | Expense id to ignore (for edit) |
+
+**Response `200`**
+
+```json
+{ "exists": true, "count": 1 }
+```
+
 ### `GET /expenses`
 
 List flat expenses with shares, newest first.
@@ -158,6 +179,7 @@ List flat expenses with shares, newest first.
     "person_name": "Armin",
     "shop_id": 2,
     "shop_name": "Grocery Store",
+    "item_id": 3,
     "date": "2026-06-15",
     "name": "Milk",
     "amount": 45,
@@ -175,7 +197,7 @@ Single expense. `404` if missing.
 
 ### `POST /expenses`
 
-Batch-create flat expenses (no parent record). Shared header fields apply to each line.
+Batch-create flat expenses (no parent record). Shared header fields apply to each line. Item names are upserted into the catalog and stored as `item_id`.
 
 **Request body**
 
@@ -197,13 +219,13 @@ Batch-create flat expenses (no parent record). Shared header fields apply to eac
 }
 ```
 
-Each item’s shares must include persons `1` and `2` and sum to `1` (within `0.001`).
+Each item’s shares must include persons `1` and `2` and sum to `1` (within `0.001`). Amount must be a whole number.
 
 **Response `201`** — array of created expenses.
 
 ### `PUT /expenses/:id`
 
-Update one expense.
+Update one expense. Upserts the item name into the catalog.
 
 **Request body**
 

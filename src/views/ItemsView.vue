@@ -83,7 +83,8 @@ onMounted(load)
   <div class="space-y-6">
     <h2 class="text-lg font-semibold text-white">Items</h2>
     <p class="text-sm text-zinc-400">
-      Catalog of item names used when adding expenses. Search starts after 3 characters.
+      Catalog of item names used when adding expenses. Renaming an item updates it on all
+      expenses. Search starts after 3 characters.
     </p>
 
     <div
