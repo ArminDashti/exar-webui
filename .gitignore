@@ -11,3 +11,6 @@ bin/server
 bin/server expenses-server.exe
 expenses-server.exe
 # --- end auto ---
+# --- auto: large files (>5MB) ---
+expenses-server.exe
+bin\server
