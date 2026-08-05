@@ -16,3 +16,5 @@ expenses-server.exe
 bin\server
 
 bin/server
+
+# auto-managed large files (>5MB)
