@@ -1,22 +1,3 @@
 *.exe
-*.EXE
-
-/node_modules
-
-# --- auto: github-commit-push-all-repos ---
-.claude/worktrees/crazy-villani-fa123c/expenses-server.exe
-.claude/worktrees/crazy-villani-fa123c/expenses-server.exe bin/server bin/server.exe expenses-server.exe
-.claude/worktrees/crazy-villani-fa123c/expenses-server.exe bin/server expenses-server.exe
-bin/server
-bin/server expenses-server.exe
-expenses-server.exe
-# --- end auto ---
-# --- auto: large files (>5MB) ---
-expenses-server.exe
-bin\server
-
-bin/server
-
-# auto-managed large files (>5MB)
-
 # === auto-managed large files (>5MB) ===
+bin/server
