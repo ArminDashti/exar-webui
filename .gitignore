@@ -1,3 +1,6 @@
 *.exe
 # === auto-managed large files (>5MB) ===
 bin/server
+
+# BEGIN AUTO-MANAGED LARGE FILES (>5MB)
+# END AUTO-MANAGED LARGE FILES
