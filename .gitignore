@@ -6,3 +6,4 @@ bin/server
 # END AUTO-MANAGED LARGE FILES
 
 # === auto-managed large files (github-commit-push-all) ===
+node_modules/
