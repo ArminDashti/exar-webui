@@ -7,3 +7,5 @@ bin/server
 
 # === auto-managed large files (github-commit-push-all) ===
 node_modules/
+
+# AUTO-IGNORE-LARGE-FILES (>5MB) â€” managed by github-commit-push-all
