@@ -2,7 +2,13 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { VitePWA } from 'vite-plugin-pwa'
 
+const basePath = process.env.VITE_BASE_PATH || '/'
+const baseNoSlash = basePath.replace(/\/$/, '') || ''
+const apiProxyTarget = process.env.VITE_API_PROXY || 'http://localhost:8080'
+const hmrClientPort = Number(process.env.VITE_HMR_CLIENT_PORT || 5173)
+
 export default defineConfig({
+  base: basePath,
   plugins: [
     vue(),
     VitePWA({
@@ -19,24 +25,11 @@ export default defineConfig({
         theme_color: '#09090b',
         background_color: '#09090b',
         display: 'standalone',
-        start_url: '/',
+        start_url: basePath,
         icons: [
-          {
-            src: 'pwa-192x192.png',
-            sizes: '192x192',
-            type: 'image/png',
-          },
-          {
-            src: 'pwa-512x512.png',
-            sizes: '512x512',
-            type: 'image/png',
-          },
-          {
-            src: 'pwa-512x512.png',
-            sizes: '512x512',
-            type: 'image/png',
-            purpose: 'maskable',
-          },
+          { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' },
+          { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png' },
+          { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
       injectManifest: {
@@ -45,9 +38,16 @@ export default defineConfig({
     }),
   ],
   server: {
+    host: true,
     port: 5173,
+    allowedHosts: true,
+    hmr: { clientPort: hmrClientPort },
     proxy: {
-      '/api': 'http://localhost:8080',
+      [`${baseNoSlash}/api`]: {
+        target: apiProxyTarget,
+        changeOrigin: true,
+        rewrite: (path) => path.replace(new RegExp(`^${baseNoSlash}/api`), '/exar/api/v1'),
+      },
     },
   },
   build: {

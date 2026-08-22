@@ -1,4 +1,10 @@
-const API = '/api'
+function withBase(path) {
+  const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
+  if (!base || base === '/') return path
+  return `${base}${path.startsWith('/') ? path : `/${path}`}`
+}
+
+const API = withBase('/api')
 
 async function request(path, options = {}) {
   const res = await fetch(`${API}${path}`, {
